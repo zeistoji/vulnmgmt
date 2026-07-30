@@ -1,0 +1,13 @@
+# local data — never publish
+vulnmgmt.db*
+*.db
+
+# real scan results of personal projects — keep private
+samples/valuwise_trivy.json
+samples/casino_trivy.json
+
+# bundled scanner binary (49 MB) — download from https://github.com/aquasecurity/trivy/releases
+tools/
+
+__pycache__/
+*.pyc

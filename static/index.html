@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vulnmgmt — Risk-Based Vulnerability Management</title>
+<style>
+:root {
+  color-scheme: light;
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --series:#2a78d6; --seq-250:#86b6ef; --seq-400:#3987e5; --seq-550:#1c5cab; --seq-650:#104281;
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  --good-text:#006300;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --series:#3987e5; --good-text:#0ca30c;
+  }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--page); color:var(--ink);
+  font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+header { display:flex; align-items:center; gap:16px; padding:12px 24px;
+  background:var(--surface); border-bottom:1px solid var(--border); flex-wrap:wrap; }
+header h1 { font-size:16px; margin:0; font-weight:650; }
+header .sub { color:var(--muted); font-size:12px; }
+nav { display:flex; gap:4px; margin-left:auto; flex-wrap:wrap; }
+nav button { border:0; background:none; color:var(--ink2); padding:6px 12px;
+  border-radius:6px; cursor:pointer; font:inherit; }
+nav button.active { background:var(--series); color:#fff; }
+nav button:hover:not(.active) { background:var(--grid); }
+main { padding:20px 24px; max-width:1280px; margin:0 auto; }
+.tiles { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; }
+.tile { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+.tile .label { color:var(--ink2); font-size:12px; }
+.tile .value { font-size:28px; font-weight:650; margin-top:2px; }
+.tile .target { color:var(--muted); font-size:11px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:12px; margin-top:12px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+.card h3 { margin:0 0 8px; font-size:13px; font-weight:650; color:var(--ink2); }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { text-align:left; color:var(--muted); font-weight:500; border-bottom:1px solid var(--grid);
+  padding:6px 8px; white-space:nowrap; }
+td { padding:6px 8px; border-bottom:1px solid var(--grid); vertical-align:top; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+tr:hover td { background:color-mix(in srgb, var(--grid) 40%, transparent); }
+.badge { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11.5px;
+  border:1px solid var(--border); white-space:nowrap; }
+.badge.P1 { border-color:var(--critical); }
+.badge.P2 { border-color:var(--serious); }
+.badge.P3 { border-color:var(--warning); }
+.badge.P4 { border-color:var(--axis); }
+.state { font-size:12px; white-space:nowrap; }
+.state.breached  { color:var(--critical); font-weight:600; }
+.state.escalate  { color:var(--serious); font-weight:600; }
+.state.notify    { color:var(--warning); }
+.state.on_track  { color:var(--good-text); }
+.kev { color:var(--critical); font-weight:650; font-size:11px; letter-spacing:.04em; }
+.controls { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 12px; align-items:center; }
+input, select, button.btn, textarea { font:inherit; color:var(--ink); background:var(--surface);
+  border:1px solid var(--axis); border-radius:6px; padding:6px 10px; }
+button.btn { cursor:pointer; }
+button.btn.primary { background:var(--series); color:#fff; border-color:var(--series); }
+button.mini { font-size:11.5px; padding:2px 8px; cursor:pointer; background:none;
+  border:1px solid var(--axis); border-radius:6px; color:var(--ink2); }
+button.mini:hover { border-color:var(--series); color:var(--series); }
+.drop { border:2px dashed var(--axis); border-radius:12px; padding:48px; text-align:center;
+  color:var(--ink2); cursor:pointer; }
+.drop.hover { border-color:var(--series); color:var(--series); }
+#tooltip { position:fixed; pointer-events:none; background:var(--surface); color:var(--ink);
+  border:1px solid var(--border); border-radius:6px; padding:6px 10px; font-size:12px;
+  box-shadow:0 2px 8px rgba(0,0,0,.18); display:none; z-index:10; }
+.empty { color:var(--muted); padding:16px 0; }
+svg text { font:11px system-ui,-apple-system,"Segoe UI",sans-serif; fill:var(--muted); }
+svg .val { fill:var(--ink2); font-variant-numeric:tabular-nums; }
+.toast { position:fixed; bottom:20px; right:20px; background:var(--surface); color:var(--ink);
+  border:1px solid var(--border); border-left:4px solid var(--series); border-radius:8px;
+  padding:10px 16px; box-shadow:0 4px 12px rgba(0,0,0,.2); z-index:20; max-width:420px; }
+.toast.err { border-left-color:var(--critical); }
+dialog { background:var(--surface); color:var(--ink); border:1px solid var(--border);
+  border-radius:12px; padding:20px; min-width:340px; }
+dialog::backdrop { background:rgba(0,0,0,.4); }
+dialog label { display:block; margin:10px 0 4px; color:var(--ink2); font-size:12.5px; }
+dialog input, dialog textarea { width:100%; }
+.row { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+.meta-line { color:var(--muted); font-size:11.5px; margin-top:10px; }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>vulnmgmt</h1><div class="sub">risk-based vulnerability management · NIST 800-40 · CIS 7</div></div>
+  <nav id="nav"></nav>
+</header>
+<main id="main"></main>
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+/* ---------------------------------------------------------------- api */
+let TOKEN = localStorage.getItem("vm_token") || "";
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers);
+  if (TOKEN) opts.headers["Authorization"] = "Bearer " + TOKEN;
+  if (opts.body && !(opts.body instanceof FormData)) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(opts.body);
+  }
+  const r = await fetch("/api" + path, opts);
+  if (r.status === 401) {
+    TOKEN = prompt("API token required (VULNMGMT_TOKEN):") || "";
+    localStorage.setItem("vm_token", TOKEN);
+    if (TOKEN) return api(path, opts);
+    throw new Error("unauthorized");
+  }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.headers.get("content-type")?.includes("json") ? r.json() : r.text();
+}
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => n == null ? "–" : n;
+function toast(msg, err) {
+  const t = document.createElement("div");
+  t.className = "toast" + (err ? " err" : ""); t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 5000);
+}
+
+/* ---------------------------------------------------------------- tooltip */
+const tip = document.getElementById("tooltip");
+function hover(el, html) {
+  el.addEventListener("mousemove", e => {
+    tip.innerHTML = html; tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - 240) + "px";
+    tip.style.top = (e.clientY + 14) + "px";
+  });
+  el.addEventListener("mouseleave", () => tip.style.display = "none");
+}
+
+/* ---------------------------------------------------------------- charts (inline SVG) */
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+// horizontal bar chart: rows = [{label, value, hint}], single-hue series
+function barChart(rows, { unit = "", max = null, color = "var(--series)" } = {}) {
+  const W = 460, rowH = 26, padL = 110, padR = 60, H = rows.length * rowH + 8;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%" });
+  const maxV = max ?? Math.max(1, ...rows.map(r => r.value));
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4, w = Math.max(2, (r.value / maxV) * (W - padL - padR));
+    el("text", { x: padL - 8, y: y + 14, "text-anchor": "end" }, svg).textContent = r.label;
+    const bar = el("rect", { x: padL, y, width: w, height: 16, rx: 4, fill: r.color || color }, svg);
+    const t = el("text", { x: padL + w + 6, y: y + 13, class: "val" }, svg);
+    t.textContent = r.value + unit;
+    hover(bar, `<b>${esc(r.label)}</b><br>${esc(r.hint ?? r.value + unit)}`);
+  });
+  return svg;
+}
+// line chart: pts = [{x label, y, hint}], single series
+function lineChart(pts, { unit = "" } = {}) {
+  const W = 460, H = 170, padL = 36, padR = 14, padT = 12, padB = 26;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%" });
+  if (pts.length === 0) return svg;
+  const maxV = Math.max(1, ...pts.map(p => p.y)) * 1.15;
+  const x = i => padL + (pts.length === 1 ? (W - padL - padR) / 2
+                : i * (W - padL - padR) / (pts.length - 1));
+  const y = v => H - padB - (v / maxV) * (H - padT - padB);
+  for (let g = 0; g <= 3; g++) {
+    const gy = padT + g * (H - padT - padB) / 3;
+    el("line", { x1: padL, x2: W - padR, y1: gy, y2: gy, stroke: "var(--grid)" }, svg);
+    el("text", { x: padL - 6, y: gy + 4, "text-anchor": "end" }, svg)
+      .textContent = Math.round(maxV * (1 - g / 3));
+  }
+  el("line", { x1: padL, x2: W - padR, y1: H - padB, y2: H - padB, stroke: "var(--axis)" }, svg);
+  if (pts.length > 1)
+    el("polyline", { points: pts.map((p, i) => `${x(i)},${y(p.y)}`).join(" "),
+      fill: "none", stroke: "var(--series)", "stroke-width": 2 }, svg);
+  pts.forEach((p, i) => {
+    const c = el("circle", { cx: x(i), cy: y(p.y), r: 4, fill: "var(--series)",
+      stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    hover(c, `<b>${esc(p.label)}</b><br>${esc(p.hint ?? p.y + unit)}`);
+    const step = Math.ceil(pts.length / 8);
+    if (i % step === 0 || i === pts.length - 1)
+      el("text", { x: x(i), y: H - 8, "text-anchor": "middle" }, svg).textContent = p.label;
+  });
+  return svg;
+}
+
+/* ---------------------------------------------------------------- views */
+const main = document.getElementById("main");
+const VIEWS = { dashboard: vDashboard, findings: vFindings, assets: vAssets,
+                import: vImport, activity: vActivity, settings: vSettings };
+let current = "dashboard";
+const nav = document.getElementById("nav");
+for (const name of Object.keys(VIEWS)) {
+  const b = document.createElement("button");
+  b.textContent = name[0].toUpperCase() + name.slice(1);
+  b.onclick = () => go(name);
+  b.dataset.view = name;
+  nav.appendChild(b);
+}
+function go(name) {
+  current = name;
+  for (const b of nav.children) b.classList.toggle("active", b.dataset.view === name);
+  main.innerHTML = '<div class="empty">loading…</div>';
+  VIEWS[name]().catch(e => { main.innerHTML = `<div class="empty">error: ${esc(e.message)}</div>`; });
+}
+
+/* ------------------------------------------------ dashboard */
+async function vDashboard() {
+  const m = await api("/metrics");
+  const cfg = m.config, open = m.totals.open + m.totals.remediated;
+  const tiles = [
+    ["MTTR P1 (days)", fmt(m.mttr_days.P1), `target ≤${cfg.sla_days.P1}d`],
+    ["SLA compliance P1", m.sla_pct.P1 != null ? m.sla_pct.P1 + "%" : "–", `target ≥${cfg.sla_target_pct}%`],
+    ["Open backlog", open, `${m.totals.accepted} risk-accepted`],
+    ["Open KEV exposures", m.kev_open.length, `target 0 past ${cfg.kev_target_hours}h`],
+    ["Avg KEV exposure", m.kev_exposure_hours != null ? m.kev_exposure_hours + "h" : "–", `target ≤${cfg.kev_target_hours}h`],
+    ["Recurrence rate", m.recurrence_pct != null ? m.recurrence_pct + "%" : "–", "target <5%"],
+  ];
+  const pri = ["P1", "P2", "P3", "P4"];
+  main.innerHTML = `
+    <div class="tiles">${tiles.map(([l, v, t]) =>
+      `<div class="tile"><div class="label">${l}</div><div class="value">${v}</div>
+       <div class="target">${t}</div></div>`).join("")}</div>
+    <div class="cards">
+      <div class="card"><h3>Open findings by priority</h3><div id="c-pri"></div></div>
+      <div class="card"><h3>Backlog aging — open findings by days open</h3><div id="c-age"></div></div>
+      <div class="card"><h3>SLA compliance % by priority (verified + past-due)</h3><div id="c-sla"></div></div>
+      <div class="card"><h3>Dwell time trend — avg days to verified close, by month</h3><div id="c-trend"></div></div>
+      <div class="card"><h3>Escalations — SLA clock alerts</h3><div id="c-esc"></div></div>
+      <div class="card"><h3>Slowest owners — avg dwell (verified closes)</h3><div id="c-own"></div></div>
+    </div>
+    <div class="meta-line">${m.kev_feed ? `CISA KEV catalog v${esc(m.kev_feed.catalog_version)} ·
+      ${m.kev_feed.entries} entries · fetched ${esc(m.kev_feed.fetched_at)}Z` :
+      "KEV feed not yet fetched"} · metrics generated ${esc(m.generated_at)}Z</div>`;
+  document.getElementById("c-pri").appendChild(barChart(
+    pri.map(p => ({ label: p + ` (SLA ${cfg.sla_days[p]}d)`, value: m.priority_open[p] || 0,
+                    hint: `${m.priority_open[p] || 0} open` }))));
+  document.getElementById("c-age").appendChild(barChart(
+    Object.entries(m.backlog_age).map(([k, v], i) => ({
+      label: k + " days", value: v,
+      color: ["var(--seq-250)", "var(--seq-400)", "var(--seq-550)", "var(--seq-650)"][i] }))));
+  document.getElementById("c-sla").appendChild(barChart(
+    pri.filter(p => m.sla_pct[p] != null).map(p => ({
+      label: p, value: m.sla_pct[p], hint: `${m.sla_pct[p]}% within ${cfg.sla_days[p]}-day SLA` })),
+    { unit: "%", max: 100 }));
+  if (!Object.keys(m.sla_pct).length)
+    document.getElementById("c-sla").innerHTML = '<div class="empty">no closed or past-due findings yet</div>';
+  const trend = document.getElementById("c-trend");
+  if (m.dwell_trend.length)
+    trend.appendChild(lineChart(m.dwell_trend.map(t => ({
+      label: t.month, y: t.avg_dwell_days,
+      hint: `${t.avg_dwell_days} days avg · ${t.closed} closed` })), { unit: "d" }));
+  else trend.innerHTML = '<div class="empty">no verified closures yet</div>';
+  const esc_ = document.getElementById("c-esc");
+  esc_.innerHTML = m.escalations.length ? `<table><tr><th>Finding</th><th>Priority</th><th>State</th></tr>
+    ${m.escalations.slice(0, 12).map(e => `<tr>
+      <td>${esc(e.asset)} · ${esc(e.cve)}</td>
+      <td><span class="badge ${e.priority}">${e.priority}</span></td>
+      <td><span class="state ${e.state}">${{breached:"⛔ SLA breached",escalate:"▲ escalate (90%)",
+          notify:"● notify owner (50%)"}[e.state]}</span></td></tr>`).join("")}</table>
+    ${m.escalations.length > 12 ? `<div class="meta-line">+${m.escalations.length - 12} more in Findings</div>` : ""}`
+    : '<div class="empty">no SLA alerts 🎉</div>';
+  const own = document.getElementById("c-own");
+  own.innerHTML = m.slow_owners.length ? "" : '<div class="empty">no verified closures yet</div>';
+  if (m.slow_owners.length)
+    own.appendChild(barChart(m.slow_owners.map(o => ({
+      label: o.owner, value: o.avg_dwell_days,
+      hint: `${o.avg_dwell_days} days avg over ${o.closed} closed` })), { unit: "d" }));
+}
+
+/* ------------------------------------------------ findings */
+async function vFindings() {
+  main.innerHTML = `
+    <div class="controls">
+      <select id="f-status"><option value="">all statuses</option>
+        <option>open</option><option>remediated</option><option>verified</option><option>accepted</option></select>
+      <select id="f-pri"><option value="">all priorities</option>
+        <option>P1</option><option>P2</option><option>P3</option><option>P4</option></select>
+      <label><input type="checkbox" id="f-kev"> KEV only</label>
+      <input id="f-q" placeholder="search CVE / asset / title" style="flex:1;min-width:180px">
+      <button class="btn" id="f-enrich">Re-enrich now</button>
+      <a class="btn" style="text-decoration:none" href="/api/export.csv">Export CSV</a>
+    </div>
+    <div class="card" id="f-table"></div>`;
+  const load = async () => {
+    const p = new URLSearchParams({
+      status: document.getElementById("f-status").value,
+      priority: document.getElementById("f-pri").value,
+      q: document.getElementById("f-q").value,
+      kev_only: document.getElementById("f-kev").checked });
+    const { findings } = await api("/findings?" + p);
+    const box = document.getElementById("f-table");
+    if (!findings.length) { box.innerHTML = '<div class="empty">no findings match</div>'; return; }
+    box.innerHTML = `<table><tr><th>Risk</th><th>Priority</th><th>CVE</th><th>Asset</th>
+      <th>Title</th><th class="num">CVSS</th><th class="num">EPSS</th><th>SLA</th>
+      <th>Status</th><th>Actions</th></tr>${findings.map(f => `<tr>
+      <td class="num"><b>${fmt(f.risk_score)}</b></td>
+      <td><span class="badge ${f.priority}">${fmt(f.priority)}</span>${f.kev ? ' <span class="kev">KEV</span>' : ""}</td>
+      <td style="white-space:nowrap">${esc(f.cve)}</td>
+      <td>${esc(f.asset)}<div class="meta-line">${esc(f.owner || "unassigned")}</div></td>
+      <td>${esc(f.title || "")}${f.solution ? `<div class="meta-line">fix: ${esc(f.solution)}</div>` : ""}</td>
+      <td class="num">${fmt(f.cvss)}</td>
+      <td class="num">${f.epss != null ? (f.epss * 100).toFixed(1) + "%" : "–"}</td>
+      <td>${f.sla_state ? `<span class="state ${f.sla_state}">${{breached:"⛔ breached",
+          escalate:"▲ " + f.sla_pct_elapsed + "%", notify:"● " + f.sla_pct_elapsed + "%",
+          on_track:"✓ " + f.sla_pct_elapsed + "%"}[f.sla_state]}</span>
+          <div class="meta-line">due ${esc((f.due_at || "").slice(0, 10))}</div>` :
+          f.status === "accepted" ? `<div class="meta-line">until ${esc((f.accepted_until || "").slice(0, 10))}</div>` : "–"}</td>
+      <td>${esc(f.status)}${f.reopened ? `<div class="meta-line">reopened ×${f.reopened}</div>` : ""}</td>
+      <td style="white-space:nowrap">${actionsFor(f)}</td></tr>`).join("")}</table>`;
+    box.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => doAction(b, load));
+  };
+  for (const id of ["f-status", "f-pri", "f-kev"])
+    document.getElementById(id).onchange = load;
+  let t; document.getElementById("f-q").oninput = () => { clearTimeout(t); t = setTimeout(load, 300); };
+  document.getElementById("f-enrich").onclick = async e => {
+    e.target.disabled = true; e.target.textContent = "enriching…";
+    try { const r = await api("/enrich", { method: "POST" }); toast(`re-enriched ${r.rescored} findings`); await load(); }
+    catch (err) { toast(err.message, true); }
+    e.target.disabled = false; e.target.textContent = "Re-enrich now";
+  };
+  await load();
+}
+function actionsFor(f) {
+  const b = (act, label) => `<button class="mini" data-act="${act}" data-id="${f.id}">${label}</button>`;
+  if (f.status === "open") return b("remediate", "remediated") + " " + b("accept", "accept risk");
+  if (f.status === "remediated") return b("verify", "rescan ✓") + " " + b("verify_failed", "rescan ✗");
+  return b("reopen", "reopen");
+}
+async function doAction(btn, reload) {
+  const { act, id } = btn.dataset;
+  const body = { action: act };
+  if (act === "accept") {
+    const d = await modal(`<h3 style="margin:0">Risk acceptance — finding #${id}</h3>
+      <label>Business justification (required)</label><textarea id="m-reason" rows="3"></textarea>
+      <label>Expiry date (required — acceptances are never indefinite)</label>
+      <input id="m-until" type="date" min="${new Date().toISOString().slice(0, 10)}">`);
+    if (!d) return;
+    body.reason = d.reason; body.until = d.until;
+  }
+  try { await api(`/findings/${id}/action`, { method: "POST", body }); reload(); }
+  catch (e) { toast(e.message, true); }
+}
+function modal(html) {
+  return new Promise(resolve => {
+    const dlg = document.createElement("dialog");
+    dlg.innerHTML = html + `<div class="row"><button class="btn" id="m-cancel">Cancel</button>
+      <button class="btn primary" id="m-ok">Confirm</button></div>`;
+    document.body.appendChild(dlg); dlg.showModal();
+    dlg.querySelector("#m-cancel").onclick = () => { dlg.remove(); resolve(null); };
+    dlg.querySelector("#m-ok").onclick = () => {
+      const out = { reason: dlg.querySelector("#m-reason")?.value.trim(),
+                    until: dlg.querySelector("#m-until")?.value };
+      dlg.remove(); resolve(out);
+    };
+  });
+}
+
+/* ------------------------------------------------ assets */
+async function vAssets() {
+  const assets = await api("/assets");
+  main.innerHTML = `
+    <div class="controls">
+      <input id="a-host" placeholder="hostname / image / target">
+      <select id="a-crit"><option>critical</option><option>high</option>
+        <option selected>medium</option><option>low</option></select>
+      <label><input type="checkbox" id="a-inet"> internet-facing</label>
+      <label><input type="checkbox" id="a-comp"> compensating control</label>
+      <input id="a-owner" placeholder="owner team">
+      <button class="btn primary" id="a-add">Save asset</button>
+    </div>
+    <div class="card">${assets.length ? `<table><tr><th>Hostname</th><th>Criticality</th>
+      <th>Internet-facing</th><th>Compensating control</th><th>Owner</th>
+      <th class="num">Open findings</th><th></th></tr>
+      ${assets.map(a => `<tr><td>${esc(a.hostname)}</td><td>${esc(a.criticality)}</td>
+        <td>${a.internet_facing ? "yes" : "no"}</td><td>${a.compensating_control ? "yes" : "no"}</td>
+        <td>${esc(a.owner)}</td><td class="num">${a.open_findings}</td>
+        <td><button class="mini" data-host="${esc(a.hostname)}" data-edit>edit</button>
+            <button class="mini" data-host="${esc(a.hostname)}" data-del>delete</button></td></tr>`).join("")}
+      </table>` : '<div class="empty">no assets yet — importing a scan auto-creates them;'
+        + ' set criticality/owner here to drive risk-based scoring</div>'}</div>
+    <div class="meta-line">Unset asset context defaults to criticality=medium, not internet-facing —
+      tagging assets is what makes prioritisation risk-based rather than CVSS-based.</div>`;
+  document.getElementById("a-add").onclick = async () => {
+    try {
+      await api("/assets", { method: "POST", body: {
+        hostname: document.getElementById("a-host").value.trim(),
+        criticality: document.getElementById("a-crit").value,
+        internet_facing: document.getElementById("a-inet").checked,
+        compensating_control: document.getElementById("a-comp").checked,
+        owner: document.getElementById("a-owner").value.trim() || "unassigned" } });
+      toast("asset saved — open findings rescored"); vAssets();
+    } catch (e) { toast(e.message, true); }
+  };
+  main.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
+    const a = assets.find(x => x.hostname === b.dataset.host);
+    document.getElementById("a-host").value = a.hostname;
+    document.getElementById("a-crit").value = a.criticality;
+    document.getElementById("a-inet").checked = !!a.internet_facing;
+    document.getElementById("a-comp").checked = !!a.compensating_control;
+    document.getElementById("a-owner").value = a.owner;
+    scrollTo({ top: 0, behavior: "smooth" });
+  });
+  main.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    if (!confirm(`delete asset ${b.dataset.host}? findings remain but lose asset context`)) return;
+    await api("/assets/" + encodeURIComponent(b.dataset.host), { method: "DELETE" });
+    vAssets();
+  });
+}
+
+/* ------------------------------------------------ import */
+async function vImport() {
+  main.innerHTML = `
+    <div class="card">
+      <h3>Import scan results</h3>
+      <div class="drop" id="drop">drop a scan file here or click to browse<br>
+        <span class="meta-line">Nessus CSV export · Trivy JSON · Grype JSON · generic CSV (asset,cve,cvss[,title])</span></div>
+      <input type="file" id="file" hidden accept=".csv,.json">
+      <div id="i-result"></div>
+    </div>
+    <div class="card">
+      <h3>How the pipeline treats an import</h3>
+      <table>
+        <tr><td>New asset+CVE pair</td><td>opens a finding — the SLA clock starts at detection, not triage</td></tr>
+        <tr><td>Already open/remediated</td><td>refreshed (CVSS/title), clock unchanged</td></tr>
+        <tr><td>Previously verified-fixed</td><td>auto-reopened and counted as recurrence (false remediation)</td></tr>
+        <tr><td>After ingest</td><td>live enrichment: CISA KEV catalog, FIRST.org EPSS; NVD backfill for missing CVSS runs in background</td></tr>
+      </table>
+    </div>`;
+  const drop = document.getElementById("drop"), file = document.getElementById("file");
+  drop.onclick = () => file.click();
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add("hover"); };
+  drop.ondragleave = () => drop.classList.remove("hover");
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("hover"); upload(e.dataTransfer.files[0]); };
+  file.onchange = () => upload(file.files[0]);
+  async function upload(f) {
+    if (!f) return;
+    drop.textContent = `importing ${f.name}…`;
+    const fd = new FormData(); fd.append("file", f);
+    try {
+      const r = await api("/import", { method: "POST", body: fd });
+      document.getElementById("i-result").innerHTML = `<div class="meta-line" style="font-size:13px">
+        <b>${esc(f.name)}</b> (${esc(r.source)}): ${r.new} new · ${r.reopened} reopened (recurrence) ·
+        ${r.still_present} still present${r.enrich_error ? `<br>⚠ ${esc(r.enrich_error)}` : ""}</div>`;
+      toast(`imported: ${r.new} new, ${r.reopened} reopened`);
+    } catch (e) { toast(e.message, true); }
+    vImport();
+  }
+}
+
+/* ------------------------------------------------ activity */
+async function vActivity() {
+  const rows = await api("/activity");
+  main.innerHTML = `<div class="card">${rows.length ? `<table>
+    <tr><th>Time (UTC)</th><th>Actor</th><th>Action</th><th>Detail</th></tr>
+    ${rows.map(r => `<tr><td style="white-space:nowrap">${esc(r.ts)}</td><td>${esc(r.actor)}</td>
+      <td>${esc(r.action)}</td><td>${esc(r.detail)}</td></tr>`).join("")}</table>`
+    : '<div class="empty">no activity yet</div>'}</div>`;
+}
+
+/* ------------------------------------------------ settings */
+async function vSettings() {
+  const cfg = await api("/config");
+  main.innerHTML = `<div class="card" style="max-width:520px">
+    <h3>SLA policy (days to remediate, by priority)</h3>
+    <table>${["P1", "P2", "P3", "P4"].map(p => `<tr><td><span class="badge ${p}">${p}</span></td>
+      <td>${{P1:"KEV-listed, or CVSS≥9 + EPSS≥0.5 on exposed/critical asset",
+             P2:"CVSS 7–8.9", P3:"CVSS 4–6.9", P4:"CVSS &lt;4"}[p]}</td>
+      <td class="num"><input id="sla-${p}" type="number" min="1" style="width:70px"
+        value="${cfg.sla_days[p]}"></td></tr>`).join("")}</table>
+    <label style="display:block;margin-top:10px;color:var(--ink2)">KEV exposure-window target (hours)
+      <input id="kev-h" type="number" min="1" style="width:90px" value="${cfg.kev_target_hours}"></label>
+    <label style="display:block;margin-top:6px;color:var(--ink2)">SLA compliance target (%)
+      <input id="sla-t" type="number" min="1" max="100" style="width:90px" value="${cfg.sla_target_pct}"></label>
+    <div class="row"><button class="btn primary" id="cfg-save">Save — rescores all open findings</button></div>
+  </div>
+  <div class="card" style="max-width:520px;margin-top:12px">
+    <h3>Connectors — notifications &amp; ticketing</h3>
+    <label style="display:block;color:var(--ink2)">Chat webhook URL (Slack or Discord incoming webhook)
+      <input id="cn-webhook" style="width:100%" placeholder="https://hooks.slack.com/… or https://discord.com/api/webhooks/…"
+        value="${esc(cfg.webhook_url || "")}"></label>
+    <label style="display:block;margin-top:8px;color:var(--ink2)">Jira base URL
+      <input id="cn-jurl" style="width:100%" placeholder="https://yourorg.atlassian.net" value="${esc(cfg.jira_url || "")}"></label>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <label style="flex:1;color:var(--ink2)">Jira email
+        <input id="cn-jemail" style="width:100%" value="${esc(cfg.jira_email || "")}"></label>
+      <label style="flex:1;color:var(--ink2)">Jira API token
+        <input id="cn-jtoken" type="password" style="width:100%" value="${esc(cfg.jira_token || "")}"></label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <label style="flex:1;color:var(--ink2)">Jira project key
+        <input id="cn-jproj" style="width:100%" placeholder="VULN" value="${esc(cfg.jira_project || "")}"></label>
+      <label style="flex:1;color:var(--ink2)">Auto-ticket priorities
+        <select id="cn-min" style="width:100%">${["P1","P2","P3","P4"].map(p =>
+          `<option value="${p}" ${cfg.ticket_min === p ? "selected" : ""}>${p} and above</option>`).join("")}</select></label>
+    </div>
+    <div class="meta-line">Tickets auto-open for new findings at the chosen priority; SLA alerts
+      (50% / 90% / breach) go to the webhook and as Jira comments; rescan results are commented on the ticket.</div>
+    <div class="row">
+      <button class="btn" id="cn-test">Test connectors</button>
+      <button class="btn primary" id="cn-save">Save connectors</button>
+    </div>
+  </div>`;
+  document.getElementById("cn-save").onclick = async () => {
+    try {
+      await api("/config", { method: "PUT", body: {
+        webhook_url: document.getElementById("cn-webhook").value,
+        jira_url: document.getElementById("cn-jurl").value,
+        jira_email: document.getElementById("cn-jemail").value,
+        jira_token: document.getElementById("cn-jtoken").value,
+        jira_project: document.getElementById("cn-jproj").value,
+        ticket_min: document.getElementById("cn-min").value } });
+      toast("connectors saved — next sync runs on import/enrich/hourly");
+    } catch (e) { toast(e.message, true); }
+  };
+  document.getElementById("cn-test").onclick = async e => {
+    e.target.disabled = true;
+    try {
+      const r = await api("/connectors/test", { method: "POST" });
+      toast(`webhook: ${r.webhook} · jira: ${r.jira}`, /failed/.test(r.webhook + r.jira));
+    } catch (err) { toast(err.message, true); }
+    e.target.disabled = false;
+  };
+  document.getElementById("cfg-save").onclick = async () => {
+    try {
+      await api("/config", { method: "PUT", body: {
+        sla_days: Object.fromEntries(["P1", "P2", "P3", "P4"].map(p =>
+          [p, document.getElementById("sla-" + p).value])),
+        kev_target_hours: document.getElementById("kev-h").value,
+        sla_target_pct: document.getElementById("sla-t").value } });
+      toast("policy saved — open findings rescored");
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+go("dashboard");
+</script>
+</body>
+</html>
