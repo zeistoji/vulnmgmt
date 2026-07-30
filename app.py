@@ -7,7 +7,7 @@ Pipeline: import scans (Nessus/Trivy/Grype/CSV) -> enrich (CISA KEV, EPSS,
 NVD backfill) -> composite risk score & SLA tiers -> lifecycle with rescan
 verification & risk acceptance -> metrics + dashboard at /.
 """
-import csv, datetime, io, json, os, threading
+import csv, datetime, io, json, os, re, shutil, threading, uuid
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -18,6 +18,18 @@ import connectors, db, enrich, importers
 HERE = os.path.dirname(os.path.abspath(__file__))
 CRIT_WEIGHT = {"critical": 1.0, "high": 0.7, "medium": 0.4, "low": 0.1}
 REFRESH_SECONDS = 3600  # hourly housekeeping; KEV feed itself has a 24h TTL
+MAX_UPLOAD = 5_000_000  # bytes
+
+# Public mode: every anonymous visitor gets an isolated database seeded with a
+# realistic programme, so a hosted instance is safe to hand to strangers.
+PUBLIC_DEMO = os.environ.get("VULNMGMT_PUBLIC", "") == "1"
+DATA_DIR = os.environ.get("VULNMGMT_DATA", os.path.join(HERE, "data"))
+SEED_DB = os.path.join(DATA_DIR, "seed.db")
+SESS_DIR = os.path.join(DATA_DIR, "sessions")
+SESSION_TTL_HOURS = 24
+if PUBLIC_DEMO:
+    os.makedirs(SESS_DIR, exist_ok=True)
+    db.DB_PATH = SEED_DB  # background threads and the seed builder use the seed
 
 
 # ------------------------------------------------------------------ scoring
@@ -42,10 +54,10 @@ def risk_score(cvss, epss, crit, inet, comp):
     return round(max(s, 0), 1)
 
 
-def rescore(con, kev, epss_map, ids=None):
+def rescore(con, kev, epss_map, ids=None, all_statuses=False):
     """Recompute score/priority/due date for open+remediated findings."""
     cfg = db.get_config(con)
-    where = "f.status IN ('open','remediated')"
+    where = "1=1" if all_statuses else "f.status IN ('open','remediated')"
     args = []
     if ids:
         where += f" AND f.id IN ({','.join('?' * len(ids))})"
@@ -180,15 +192,112 @@ def housekeeping():
             db.log(con, "system", "connector_sync_failed", str(exc)); con.commit()
     finally:
         con.close()
-    try:
-        enrich.nvd_backfill()
-    except Exception:
-        pass
+    if not PUBLIC_DEMO:
+        try:
+            enrich.nvd_backfill()
+        except Exception:
+            pass
 
 
 def _loop(stop: threading.Event):
     while not stop.wait(REFRESH_SECONDS):
         housekeeping()
+        if PUBLIC_DEMO:  # drop visitor sandboxes older than the session TTL
+            cutoff = datetime.datetime.now().timestamp() - SESSION_TTL_HOURS * 3600
+            for name in os.listdir(SESS_DIR):
+                p = os.path.join(SESS_DIR, name)
+                try:
+                    if os.path.getmtime(p) < cutoff:
+                        os.remove(p)
+                except OSError:
+                    pass
+
+
+# ------------------------------------------------------------------ public-mode seed
+# (asset, cve, cvss, title, detected_days_ago, verified_days_ago|None)
+SEED_ASSETS = [
+    ("pan-fw-edge-01", "critical", 1, "network-team", 0),
+    ("web-lb-01", "high", 1, "web-team", 1),
+    ("db-prod-01", "critical", 0, "dba-team", 0),
+    ("jump-host-01", "high", 1, "infra-team", 0),
+    ("legacy-app-03", "medium", 0, "app-team", 0),
+    ("dev-tomcat-07", "low", 0, "dev-team", 0),
+    ("payments-api:2.4.1 (debian 12.5)", "critical", 1, "payments-team", 0),
+    ("build-agent-02", "medium", 0, "ci-team", 0),
+    ("mail-relay-01", "medium", 0, "infra-team", 0),
+    ("citrix-adc-01", "critical", 1, "network-team", 0),
+    ("wiki-01", "medium", 0, "app-team", 0),
+]
+SEED_FINDINGS = [
+    # ~5 months of verified history (dwell time trending down)
+    ("web-lb-01", "CVE-2023-38545", 9.8, "curl SOCKS5 Heap Buffer Overflow", 140, 118),
+    ("mail-relay-01", "CVE-2023-5678", 5.3, "OpenSSL DH Key Generation DoS", 132, 112),
+    ("jump-host-01", "CVE-2023-48795", 5.9, "SSH Terrapin Prefix Truncation", 105, 89),
+    ("db-prod-01", "CVE-2024-0727", 5.5, "OpenSSL PKCS12 NULL Dereference", 98, 84),
+    ("build-agent-02", "CVE-2024-2511", 5.9, "OpenSSL Session Cache DoS", 70, 61),
+    ("pan-fw-edge-01", "CVE-2024-3596", 9.0, "RADIUS Blast-RADIUS Forgery", 68, 59),
+    ("web-lb-01", "CVE-2022-48174", 9.8, "BusyBox Stack Overflow", 66, 58),
+    ("citrix-adc-01", "CVE-2023-4966", 9.4, "Citrix NetScaler Session Hijack (Citrix Bleed)", 40, 38),
+    ("mail-relay-01", "CVE-2024-28182", 7.5, "nghttp2 CONTINUATION Flood", 38, 33.5),
+    ("dev-tomcat-07", "CVE-2024-23897", 9.8, "Jenkins CLI Arbitrary File Read", 15, 13),
+    ("wiki-01", "CVE-2023-22515", 10.0, "Atlassian Confluence Privilege Escalation", 12, 9.5),
+    # open backlog with varied ages and SLA states
+    ("pan-fw-edge-01", "CVE-2024-3400", 10.0, "PAN-OS GlobalProtect Command Injection", 2, None),
+    ("web-lb-01", "CVE-2023-44487", 7.5, "HTTP/2 Rapid Reset DDoS", 20, None),
+    ("jump-host-01", "CVE-2024-6387", 8.1, "OpenSSH regreSSHion RCE", 26, None),
+    ("db-prod-01", "CVE-2024-1086", 7.8, "Linux Kernel netfilter Use-After-Free", 4, None),
+    ("dev-tomcat-07", "CVE-2022-22965", 9.8, "Spring4Shell RCE", 6.5, None),
+    ("payments-api:2.4.1 (debian 12.5)", "CVE-2023-45853", 9.8, "zlib integer overflow", 10, None),
+    ("payments-api:2.4.1 (debian 12.5)", "CVE-2024-6345", 8.8, "setuptools RCE via download functions", 33, None),
+    ("payments-api:2.4.1 (debian 12.5)", "CVE-2024-28085", 6.7, "util-linux wall escape injection", 45, None),
+    ("payments-api:2.4.1 (debian 12.5)", "CVE-2024-35195", 5.6, "requests cert verification bypass", 95, None),
+    ("mail-relay-01", "CVE-2021-3449", 5.9, "OpenSSL NULL Pointer Dereference", 15, None),
+    ("build-agent-02", "CVE-2023-38408", 9.8, "OpenSSH ssh-agent Forwarding RCE", 8, None),
+]
+# offline fallback so a hosted instance still seeds if feeds are unreachable at boot
+FALLBACK_KEV = {"CVE-2024-3400", "CVE-2023-44487", "CVE-2019-0708", "CVE-2022-22965",
+                "CVE-2024-1086", "CVE-2023-4966", "CVE-2023-22515"}
+FALLBACK_EPSS = {"CVE-2024-3400": .97, "CVE-2023-44487": .97, "CVE-2024-6387": .92,
+                 "CVE-2024-1086": .28, "CVE-2022-22965": .96, "CVE-2023-4966": .96,
+                 "CVE-2023-22515": .94, "CVE-2023-38408": .80, "CVE-2021-3449": .63}
+
+
+def build_seed():
+    """Build the seed database every visitor's sandbox is copied from."""
+    con = db.connect()
+    try:
+        if con.execute("SELECT COUNT(*) c FROM findings").fetchone()["c"]:
+            return
+        t0 = db.now()
+        d = lambda days: db.iso(t0 - datetime.timedelta(days=days))
+        con.executemany("INSERT OR IGNORE INTO assets VALUES(?,?,?,?,?,?)",
+                        [(h, c, i, o, cc, d(150)) for h, c, i, o, cc in SEED_ASSETS])
+        for asset, cve, cvss, title, det, ver in SEED_FINDINGS:
+            if ver is None:
+                con.execute("INSERT INTO findings(asset,cve,cvss,title,detected_at)"
+                            " VALUES(?,?,?,?,?)", (asset, cve, cvss, title, d(det)))
+            else:
+                con.execute(
+                    "INSERT INTO findings(asset,cve,cvss,title,detected_at,remediated_at,"
+                    "verified_at,status) VALUES(?,?,?,?,?,?,?,'verified')",
+                    (asset, cve, cvss, title, d(det), d(ver + 0.5), d(ver)))
+        con.execute("INSERT INTO findings(asset,cve,cvss,title,detected_at,status,"
+                    "accepted_until,accepted_reason) VALUES(?,?,?,?,?,'accepted',?,?)",
+                    ("legacy-app-03", "CVE-2019-0708", 9.8, "Microsoft RDP BlueKeep RCE",
+                     d(30), db.iso(t0 + datetime.timedelta(days=60)),
+                     "Isolated to management VLAN; decommission scheduled next quarter."))
+        con.execute("UPDATE findings SET reopened=1 WHERE cve='CVE-2024-28182'")
+        try:
+            kev = enrich.get_kev(con)
+            epss = enrich.get_epss([r[1] for r in SEED_FINDINGS])
+        except Exception:
+            kev, epss = FALLBACK_KEV, dict(FALLBACK_EPSS)
+        rescore(con, kev, epss, all_statuses=True)
+        db.log(con, "system", "seed_built", f"{len(SEED_FINDINGS) + 1} findings")
+        con.commit()
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        con.close()
 
 
 # ------------------------------------------------------------------ app & auth
@@ -196,8 +305,30 @@ app = FastAPI(title="vulnmgmt", version="1.0")
 _stop = threading.Event()
 
 
+if PUBLIC_DEMO:
+    @app.middleware("http")
+    async def session_sandbox(request: Request, call_next):
+        """Each visitor works on their own copy of the seed database."""
+        sid = request.cookies.get("vm_sid", "")
+        if not re.fullmatch(r"[0-9a-f]{32}", sid):
+            sid = uuid.uuid4().hex
+        path = os.path.join(SESS_DIR, sid + ".db")
+        if not os.path.exists(path):
+            shutil.copy(SEED_DB, path)
+        token = db.db_path.set(path)
+        try:
+            response = await call_next(request)
+        finally:
+            db.db_path.reset(token)
+        response.set_cookie("vm_sid", sid, max_age=SESSION_TTL_HOURS * 3600,
+                            httponly=True, samesite="lax")
+        return response
+
+
 @app.on_event("startup")
 def startup():
+    if PUBLIC_DEMO:
+        build_seed()
     threading.Thread(target=housekeeping, daemon=True).start()
     threading.Thread(target=_loop, args=(_stop,), daemon=True).start()
 
@@ -247,7 +378,7 @@ async def put_config(request: Request):
             if k in body:
                 cfg[k] = int(body[k])
         for k in ("webhook_url", "jira_url", "jira_email", "jira_token", "jira_project"):
-            if k in body:
+            if k in body and not PUBLIC_DEMO:  # public instance: no outbound targets for visitors
                 cfg[k] = str(body[k]).strip()
         if "ticket_min" in body:
             if body["ticket_min"] not in PRI_ORDER:
@@ -315,6 +446,8 @@ def delete_asset(hostname: str, request: Request):
 @app.post("/api/import", dependencies=[api])
 async def import_scan(request: Request, file: UploadFile):
     raw = await file.read()
+    if len(raw) > MAX_UPLOAD:
+        raise HTTPException(413, f"file exceeds {MAX_UPLOAD // 1_000_000} MB limit")
     try:
         rows = importers.parse(file.filename or "scan", raw)
     except ValueError as exc:
@@ -369,8 +502,9 @@ async def import_scan(request: Request, file: UploadFile):
                                   + (f" — ⚠ {p1} new P1" if p1 else ""))
             except Exception as exc:
                 db.log(con, "system", "webhook_failed", str(exc)); con.commit()
-        threading.Thread(target=enrich.nvd_backfill, daemon=True).start()
-        threading.Thread(target=sync_connectors_bg, daemon=True).start()
+        if not PUBLIC_DEMO:  # worker threads don't carry the visitor's sandbox context
+            threading.Thread(target=enrich.nvd_backfill, daemon=True).start()
+            threading.Thread(target=sync_connectors_bg, daemon=True).start()
         return {"new": new, "reopened": reopened, "still_present": updated,
                 "source": rows[0]["source"], "enrich_error": enrich_error}
     finally:
@@ -490,6 +624,9 @@ def trigger_enrich(request: Request):
 @app.post("/api/connectors/test", dependencies=[api])
 def test_connectors():
     """Send a test webhook message and probe Jira auth; report per-connector."""
+    if PUBLIC_DEMO:
+        return {"webhook": "disabled on the public instance — run your own copy to connect",
+                "jira": "disabled on the public instance — run your own copy to connect"}
     con = db.connect()
     try:
         cfg = db.get_config(con)

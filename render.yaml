@@ -1,0 +1,11 @@
+# Render Blueprint: deploys the real server publicly on the free plan.
+# In public mode every visitor gets their own sandboxed database copy, so the
+# hosted instance is safe to link from a portfolio.
+services:
+  - type: web
+    name: vulnmgmt
+    runtime: docker
+    plan: free
+    envVars:
+      - key: VULNMGMT_PUBLIC
+        value: "1"

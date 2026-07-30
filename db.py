@@ -1,8 +1,13 @@
-"""SQLite persistence layer. WAL mode, one connection per request/thread."""
-import datetime, json, os, sqlite3
+"""SQLite persistence layer. WAL mode, one connection per request/thread.
+
+In public mode the app serves many anonymous visitors, each with an isolated
+database: request middleware points `db_path` (a contextvar) at that
+visitor's session copy; background threads fall back to DB_PATH."""
+import contextvars, datetime, json, os, sqlite3
 
 DB_PATH = os.environ.get("VULNMGMT_DB",
                          os.path.join(os.path.dirname(os.path.abspath(__file__)), "vulnmgmt.db"))
+db_path = contextvars.ContextVar("db_path", default=None)
 
 DEFAULT_CONFIG = {
     "sla_days": {"P1": 7, "P2": 30, "P3": 90, "P4": 180},
@@ -60,7 +65,7 @@ parse = datetime.datetime.fromisoformat
 
 
 def connect():
-    con = sqlite3.connect(DB_PATH, timeout=30)
+    con = sqlite3.connect(db_path.get() or DB_PATH, timeout=30)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")

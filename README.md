@@ -8,10 +8,18 @@ dashboard.
 
 FastAPI + SQLite. No other infrastructure required.
 
-**▶ Live demo:** [docs/index.html](docs/index.html) runs the full UI and
-scoring engine entirely in the browser (seeded with a simulated programme
-history, KEV/EPSS snapshot instead of live feeds) — served via GitHub Pages
-if enabled on this repo. The sections below describe the real server.
+## Hosting it publicly (portfolio link)
+
+The repo ships a [render.yaml](render.yaml) Blueprint that deploys the real
+server to Render's free tier with `VULNMGMT_PUBLIC=1`. In public mode every
+visitor is silently given **their own sandboxed copy of the database**
+(cookie-keyed, seeded with a realistic five-month programme history, cleaned
+up after 24 h), so strangers can freely import scans, remediate, verify, and
+accept risk without stepping on each other — while enrichment still runs
+against the live CISA KEV feed and EPSS API. Outbound connectors and NVD
+backfill are disabled for visitors, and uploads are capped at 5 MB.
+Note: free-tier instances sleep when idle — the first visit after a quiet
+period takes ~30–60 s to wake.
 
 ## Run
 
